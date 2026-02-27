@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>自助旅行路線規劃</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">自助旅行路線規劃</div>
+    <div class="sub">輸入多個景點 → 選定座標 → 自動排序路線（Google / 本地）</div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel">
+      <div class="card">
+        <div class="h">0) 設定 Google Maps API Key</div>
+        <div class="row">
+          <input id="apiKey" class="in" type="password" placeholder="貼上你的 API key（建議限制到你的網域）" />
+          <button id="saveKey" class="btn" type="button">儲存並載入地圖</button>
+          <button id="clearKey" class="btn ghost" type="button">清除 key</button>
+        </div>
+        <div id="keyStatus" class="status" aria-live="polite"></div>
+      </div>
+
+      <div class="card">
+        <div class="h">1) 搜尋地點（中英文都可）</div>
+        <div class="row">
+          <input id="q" class="in" type="text" placeholder="例如：台北車站 / Taipei 101 / Shibuya" autocomplete="off" />
+          <button id="search" class="btn" type="button">Google 搜尋</button>
+        </div>
+        <div class="row">
+          <select id="cand" class="sel" disabled>
+            <option value="">請先搜尋</option>
+          </select>
+          <button id="confirm" class="btn" type="button" disabled>確定加入</button>
+        </div>
+        <div id="searchStatus" class="status" aria-live="polite"></div>
+      </div>
+
+      <div class="card">
+        <div class="h">2) 已加入景點</div>
+        <div id="list" class="list"></div>
+        <div class="row end">
+          <button id="clearAll" class="btn danger" type="button">清空全部</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="h">3) 最佳化路線與順序</div>
+        <div class="grid">
+          <label class="lab">方法
+            <select id="method" class="sel">
+              <option value="google">Google 路線（道路距離/時間）</option>
+              <option value="local">本地計算（直線距離）</option>
+            </select>
+          </label>
+          <label class="lab">交通
+            <select id="mode" class="sel">
+              <option value="DRIVING">開車</option>
+              <option value="WALKING">步行</option>
+              <option value="BICYCLING">自行車</option>
+              <option value="TRANSIT">大眾運輸</option>
+            </select>
+          </label>
+          <label class="lab">起點
+            <select id="start" class="sel" disabled></select>
+          </label>
+          <label class="lab">終點
+            <select id="end" class="sel" disabled></select>
+          </label>
+        </div>
+        <label class="chk"><input id="round" type="checkbox" checked />返回起點（環狀）</label>
+        <div class="row end">
+          <button id="opt" class="btn primary" type="button" disabled>規劃最佳路線</button>
+        </div>
+        <div id="routeStatus" class="status" aria-live="polite"></div>
+        <div id="it" class="it"></div>
+      </div>
+
+      <div class="card note">
+        <div class="h">注意</div>
+        <div class="small">
+          <div>此網站是純前端，API key 會暴露；請務必在 Google Cloud Console 限制 HTTP referrer 到你的網域。</div>
+          <div>Google Directions 每次請求最多 25 個 waypoints（超過請分批）。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mapBox">
+      <div id="map" class="map"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
