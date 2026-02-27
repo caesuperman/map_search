@@ -14,14 +14,20 @@ var el={
 };
 
 var map=null, geocoder=null, ds=null, dr=null;
+var initMapCalled=false;
 var markers=[], previewMarker=null, localPolyline=null;
 var candidates=[]; // {name,address,lat,lng,placeId}
 var places=[];     // {id,name,address,lat,lng,placeId}
 var orderIds=null; // optimized ids for numbering
 
 function uid(){return 'p_'+Math.random().toString(16).slice(2)+'_'+Date.now().toString(16);}
-function st(node,msg){node.textContent=msg||'';}
+function st(node,msg){try{if(!node||typeof node.textContent==='undefined') return; node.textContent=msg||'';}catch(e){if(window.console&&console.warn) console.warn('st() failed',e);}}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+// Called by Google Maps JS when key auth fails.
+window.gm_authFailure=function(){
+  if(el && el.keyStatus) st(el.keyStatus,'Google Maps API Key 驗證失敗（可能是 referrer 限制或 Key 錯誤）。');
+};
 
 function loadPlaces(){
   try{
@@ -325,19 +331,54 @@ function loadKey(){try{return (localStorage.getItem(LS_KEY)||'').trim();}catch(e
 function saveKey(k){try{localStorage.setItem(LS_KEY,(k||'').trim());}catch(e){}}
 function clearKey(){try{localStorage.removeItem(LS_KEY);}catch(e){}}
 
-function loadGoogleMaps(){
-  var key=loadKey();
+function loadGoogleMaps(keyOverride){
+  var key = (keyOverride||'').trim() || loadKey();
   if(!key){st(el.keyStatus,'尚未設定 API key。'); return;}
+
   st(el.keyStatus,'載入 Google Maps…');
-  if(window.google && window.google.maps){st(el.keyStatus,'Google Maps 已載入。'); if(window.initMap) window.initMap(); return;}
+
+  // Remove previously injected script to avoid stale key/callback.
+  var old = document.getElementById('gmaps-js');
+  if(old) old.parentNode.removeChild(old);
+
+  // If already loaded, just init.
+  if(window.google && window.google.maps){
+    st(el.keyStatus,'Google Maps 已載入。');
+    if(window.initMap) window.initMap();
+    return;
+  }
+
+  initMapCalled=false;
+
   var s=document.createElement('script');
+  s.id='gmaps-js';
   s.async=true; s.defer=true;
   s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(key)+'&callback=initMap&v=weekly';
-  s.onerror=function(){st(el.keyStatus,'Google Maps 載入失敗（請確認 key / 網域限制 / 配額）。');};
+  s.onerror=function(){
+    st(el.keyStatus,'Google Maps 載入失敗（請確認 key / 網域限制 / 已啟用 Maps JavaScript API / 配額）。');
+  };
+  s.onload=function(){
+    // If script loaded but callback did not run, try calling initMap.
+    setTimeout(function(){
+      if(!initMapCalled && window.google && window.google.maps && window.initMap){
+        st(el.keyStatus,'Google Maps 已載入（補呼叫 initMap）。');
+        window.initMap();
+      }
+    }, 300);
+  };
   document.head.appendChild(s);
+
+  // Timeout hint for common misconfig.
+  setTimeout(function(){
+    if(!initMapCalled && !(window.google && window.google.maps)){
+      st(el.keyStatus,'載入超時：請檢查 API key 的 HTTP referrer 限制是否包含此網站網域，並啟用 Maps JavaScript API。');
+    }
+  }, 12000);
 }
 
+
 window.initMap=function(){
+  initMapCalled=true;
   map=new google.maps.Map(el.map,{center:{lat:25.033968,lng:121.564468},zoom:12,mapTypeControl:false,streetViewControl:false,fullscreenControl:true});
   geocoder=new google.maps.Geocoder();
   ds=new google.maps.DirectionsService();
@@ -347,31 +388,58 @@ window.initMap=function(){
 };
 
 function bind(){
-  el.saveKey.addEventListener('click',function(){
-    var k=(el.apiKey.value||'').trim();
-    if(!k){st(el.keyStatus,'請貼上 API key。'); return;}
-    saveKey(k); st(el.keyStatus,'已儲存 key，載入地圖中…');
-    loadGoogleMaps();
-  });
-  el.clearKey.addEventListener('click',function(){clearKey(); el.apiKey.value=''; st(el.keyStatus,'已清除 key。');});
+  if(!el) return;
 
-  el.search.addEventListener('click',doSearch);
-  el.q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault(); doSearch();}});
-  el.cand.addEventListener('change',previewCandidate);
-  el.confirm.addEventListener('click',confirmCandidate);
+  if(el.saveKey){
+    el.saveKey.addEventListener('click',function(){
+      var k=(el.apiKey&&el.apiKey.value?el.apiKey.value:'').trim();
+      if(!k){st(el.keyStatus,'請貼上 API key。'); return;}
+      saveKey(k); st(el.keyStatus,'已儲存 key，載入地圖中…');
+      loadGoogleMaps(k);
+    });
+  }
 
-  el.round.addEventListener('change',function(){el.end.disabled=el.round.checked||places.length<2;});
-  el.opt.addEventListener('click',optimize);
+  if(el.clearKey){
+    el.clearKey.addEventListener('click',function(){clearKey(); if(el.apiKey) el.apiKey.value=''; st(el.keyStatus,'已清除 key。');});
+  }
 
-  el.clearAll.addEventListener('click',function(){
-    places=[]; candidates=[]; orderIds=null; savePlaces();
-    if(localPolyline){ localPolyline.setMap(null); localPolyline=null; }
-    renderCandidates(); syncUI(); st(el.searchStatus,'已清空。');
-  });
+  if(el.search){
+    el.search.addEventListener('click',doSearch);
+  }
+  if(el.q){
+    el.q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault(); doSearch();}});
+  }
+  if(el.cand){
+    el.cand.addEventListener('change',previewCandidate);
+  }
+  if(el.confirm){
+    el.confirm.addEventListener('click',confirmCandidate);
+  }
+
+  if(el.round){
+    el.round.addEventListener('change',function(){if(el.end) el.end.disabled=el.round.checked||places.length<2;});
+  }
+  if(el.opt){
+    el.opt.addEventListener('click',optimize);
+  }
+
+  if(el.clearAll){
+    el.clearAll.addEventListener('click',function(){
+      places=[]; candidates=[]; orderIds=null; savePlaces();
+      if(localPolyline){ localPolyline.setMap(null); localPolyline=null; }
+      renderCandidates(); syncUI(); st(el.searchStatus,'已清空。');
+    });
+  }
 }
 
 // boot
 loadPlaces();
+try{
+  var saved=loadKey();
+  if(saved){
+    st(el.keyStatus,'偵測到已儲存的 API key（已隱藏）。按「儲存並載入地圖」即可重新載入。');
+  }
+}catch(e){}
 bind();
 renderCandidates();
 syncStartEnd();
