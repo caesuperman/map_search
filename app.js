@@ -6,7 +6,7 @@ var LS_KEY='gmaps_api_key_v1';
 var $=function(id){return document.getElementById(id);};
 
 var el={
-  apiKey:$('apiKey'),saveKey:$('saveKey'),clearKey:$('clearKey'),keyStatus:$('keyStatus'),
+  apiKey:$('apiKey'),saveKey:$('saveKey'),clearKey:$('clearKey'),keyStatus:$('keyStatus'),originHint:$('originHint'),
   q:$('q'),search:$('search'),cand:$('cand'),confirm:$('confirm'),searchStatus:$('searchStatus'),
   list:$('list'),clearAll:$('clearAll'),
   method:$('method'),mode:$('mode'),start:$('start'),end:$('end'),round:$('round'),opt:$('opt'),
@@ -162,7 +162,8 @@ function doSearch(){
         address:r.formatted_address||'',
         lat:loc?loc.lat():0,
         lng:loc?loc.lng():0,
-        placeId:r.place_id||null
+        placeId:r.place_id||null,
+        query:q
       };
     });
     renderCandidates();
@@ -172,9 +173,10 @@ function doSearch(){
 
 function confirmCandidate(){
   var i=Number(el.cand.value); var c=candidates[i]; if(!c) return;
-  places.push({id:uid(),name:c.name||'未命名地點',address:c.address,lat:c.lat,lng:c.lng,placeId:c.placeId});
+  var userName=(c.query||'').trim();
+  places.push({id:uid(),name:(userName||c.name||'未命名地點'),address:c.address,lat:c.lat,lng:c.lng,placeId:c.placeId});
   savePlaces(); orderIds=null; syncUI();
-  st(el.searchStatus,'已加入：'+c.name);
+  st(el.searchStatus,'已加入：'+((c.query||'').trim()||c.name));
 }
 
 function havKm(a,b){
@@ -353,7 +355,7 @@ function loadGoogleMaps(keyOverride){
   var s=document.createElement('script');
   s.id='gmaps-js';
   s.async=true; s.defer=true;
-  s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(key)+'&callback=initMap&v=weekly';
+  s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(key)+'&loading=async&callback=initMap&v=weekly';
   s.onerror=function(){
     st(el.keyStatus,'Google Maps 載入失敗（請確認 key / 網域限制 / 已啟用 Maps JavaScript API / 配額）。');
   };
@@ -385,6 +387,18 @@ window.initMap=function(){
   dr=new google.maps.DirectionsRenderer({map:map,suppressMarkers:true,polylineOptions:{strokeColor:'#7ab7ff',strokeOpacity:0.85,strokeWeight:5}});
   st(el.keyStatus,'Google Maps 已就緒。');
   syncUI();
+
+  // Detect Google Maps auth/config errors rendered inside the map container.
+  setTimeout(function(){
+    try{
+      if(el && el.map){
+        var err=el.map.querySelector('.gm-err-container, .gm-err-title');
+        if(err){
+          st(el.keyStatus,'Google 地圖載入失敗（請看 Console 的 Google Maps JavaScript API error，例如 ApiNotActivatedMapError/RefererNotAllowedMapError）。');
+        }
+      }
+    }catch(e){}
+  }, 800);
 };
 
 function bind(){
@@ -434,6 +448,15 @@ function bind(){
 
 // boot
 loadPlaces();
+try{
+  if(el && el.originHint){
+    var base=location.pathname.replace(/[^/]*$/, '');
+    if(!base.endsWith('/')) base = base + '/';
+    var ref1=location.origin+base+'*';
+    var ref2=location.origin+'/*';
+    el.originHint.textContent='目前網址：'+location.origin+base+'   Referrer 建議：'+ref1+'（或更寬：'+ref2+'）';
+  }
+}catch(e){}
 try{
   var saved=loadKey();
   if(saved){
