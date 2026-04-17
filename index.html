@@ -80,8 +80,18 @@
         <div id="it" class="it"></div>
       </div>
 
+      <div class="card">
+        <div class="h">4) 手動排序後規劃路線</div>
+        <div class="small">將景點上下移動後，可依指定順序規劃路線與計算距離。此功能不會取代上方最佳化功能。</div>
+        <div id="manualList" class="list manualList"></div>
+        <div class="row end">
+          <button id="manualPlan" class="btn primary" type="button" disabled>依手動順序規劃</button>
+        </div>
+        <div id="manualStatus" class="status" aria-live="polite"></div>
+      </div>
+
       <div class="card note">
-        <div class="h">注意</div>
+        <div class="h">5) 注意</div>
         <div class="small">
           <div>此網站是純前端，API key 會暴露；請務必在 Google Cloud Console 限制 HTTP referrer 到你的網域。</div>
           <div>Google Directions 每次請求最多 25 個 waypoints（超過請分批）。</div>

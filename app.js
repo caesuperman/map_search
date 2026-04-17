@@ -10,7 +10,8 @@ var el={
   q:$('q'),search:$('search'),cand:$('cand'),confirm:$('confirm'),searchStatus:$('searchStatus'),
   list:$('list'),clearAll:$('clearAll'),
   method:$('method'),mode:$('mode'),start:$('start'),end:$('end'),round:$('round'),opt:$('opt'),
-  routeStatus:$('routeStatus'),it:$('it'),map:$('map')
+  routeStatus:$('routeStatus'),it:$('it'),map:$('map'),
+  manualList:$('manualList'),manualPlan:$('manualPlan'),manualStatus:$('manualStatus')
 };
 
 var map=null, geocoder=null, ds=null, dr=null;
@@ -19,6 +20,7 @@ var markers=[], previewMarker=null, localPolyline=null;
 var candidates=[]; // {name,address,lat,lng,placeId}
 var places=[];     // {id,name,address,lat,lng,placeId}
 var orderIds=null; // optimized ids for numbering
+var manualOrderIds=[];
 
 function uid(){return 'p_'+Math.random().toString(16).slice(2)+'_'+Date.now().toString(16);}
 function st(node,msg){try{if(!node||typeof node.textContent==='undefined') return; node.textContent=msg||'';}catch(e){if(window.console&&console.warn) console.warn('st() failed',e);}}
@@ -48,6 +50,20 @@ function mapsUrl(p){
 
 function placeById(id){for(var i=0;i<places.length;i++) if(places[i].id===id) return places[i]; return null;}
 function idxInOrder(id){if(!orderIds) return null; var i=orderIds.indexOf(id); return i>=0?i:null;}
+function syncManualOrder(){
+  var valid={};
+  places.forEach(function(p){valid[p.id]=true;});
+  manualOrderIds=manualOrderIds.filter(function(id){return !!valid[id];});
+  places.forEach(function(p){if(manualOrderIds.indexOf(p.id)<0) manualOrderIds.push(p.id);});
+}
+function moveManual(id,dir){
+  var i=manualOrderIds.indexOf(id);
+  var j=i+dir;
+  if(i<0||j<0||j>=manualOrderIds.length) return;
+  var tmp=manualOrderIds[i]; manualOrderIds[i]=manualOrderIds[j]; manualOrderIds[j]=tmp;
+  renderManualList();
+  st(el.manualStatus,'已更新手動排序，按「依手動順序規劃」即可重算。');
+}
 
 function clearMarkers(){markers.forEach(function(m){m.setMap(null);}); markers=[];}
 function renderMarkers(){
@@ -86,6 +102,29 @@ function renderList(){
   });
 }
 
+function renderManualList(){
+  if(!el.manualList) return;
+  el.manualList.innerHTML='';
+  if(places.length===0){el.manualList.innerHTML='<div class="status">尚未加入任何景點。</div>'; return;}
+  syncManualOrder();
+  manualOrderIds.forEach(function(id,i){
+    var p=placeById(id); if(!p) return;
+    var div=document.createElement('div'); div.className='item';
+    div.innerHTML=
+      '<div class="n">'+esc(String(i+1))+'</div>'+
+      '<div><div class="t">'+esc(p.name)+'</div>'+
+      '<div class="s">'+(p.address?esc(p.address)+'<br>':'')+
+      '<code>'+esc(p.lat.toFixed(6)+', '+p.lng.toFixed(6))+'</code></div></div>';
+    var act=document.createElement('div'); act.className='manualActions';
+    var up=document.createElement('button'); up.className='btn'; up.type='button'; up.textContent='上移'; up.disabled=i===0;
+    var down=document.createElement('button'); down.className='btn'; down.type='button'; down.textContent='下移'; down.disabled=i===manualOrderIds.length-1;
+    up.addEventListener('click',function(){moveManual(id,-1);});
+    down.addEventListener('click',function(){moveManual(id,1);});
+    act.appendChild(up); act.appendChild(down); div.appendChild(act);
+    el.manualList.appendChild(div);
+  });
+}
+
 function fillSel(sel, selected){
   sel.innerHTML='';
   places.forEach(function(p,i){var o=document.createElement('option'); o.value=p.id; o.textContent=String(i+1)+'. '+p.name; sel.appendChild(o);});
@@ -102,12 +141,16 @@ function syncStartEnd(){
 }
 
 function syncUI(){
+  syncManualOrder();
   renderList();
+  renderManualList();
   syncStartEnd();
   el.opt.disabled=places.length<2;
+  if(el.manualPlan) el.manualPlan.disabled=places.length<2;
   if(dr) dr.set('directions',null);
   if(localPolyline){ localPolyline.setMap(null); localPolyline=null; }
   el.it.innerHTML=''; st(el.routeStatus,'');
+  st(el.manualStatus,'');
   renderMarkers();
   fitBounds();
 }
@@ -263,47 +306,79 @@ function fmtSec(s){
   return String(h)+' 小時 '+String(m)+' 分';
 }
 
-function googleOptimize(){
+function renderLocalRoute(ids, statusMsg){
+  if(ids.length<2||!map) return;
+  var ord=ids.slice();
+  orderIds=ord.slice();
+  if(el.round.checked) ord.push(ord[0]);
+  renderMarkers(); renderList();
+
+  if(dr) dr.set('directions',null);
+  if(localPolyline) localPolyline.setMap(null);
+  var path=ord.map(function(id){var p=placeById(id); return p?{lat:p.lat,lng:p.lng}:null;}).filter(Boolean);
+  localPolyline=new google.maps.Polyline({map:map,path:path,geodesic:true,strokeColor:'#48d7b2',strokeOpacity:0.85,strokeWeight:4});
+
+  el.it.innerHTML='';
+  var total=0;
+  for(var i=0;i<ord.length-1;i++){
+    var A=placeById(ord[i]), B=placeById(ord[i+1]); if(!A||!B) continue;
+    var dk=havKm(A,B); total+=dk;
+    var row=document.createElement('div'); row.className='leg';
+    row.innerHTML='<strong>'+esc((i+1)+'. '+A.name)+'</strong> → <strong>'+esc(B.name)+'</strong><div class="status">距離：約 '+esc(dk.toFixed(2))+' km（直線）</div>';
+    el.it.appendChild(row);
+  }
+  var tail=document.createElement('div'); tail.className='leg';
+  tail.innerHTML='<strong>總距離</strong><div class="status">約 '+esc(total.toFixed(2))+' km（直線）</div>';
+  el.it.appendChild(tail);
+  st(el.routeStatus,statusMsg);
+}
+
+function renderGoogleRoute(ids, optimizeWaypoints, statusMsg){
   if(!ds||!dr){st(el.routeStatus,'地圖尚未載入。'); return;}
-  if(places.length<2) return;
+  if(ids.length<2){st(el.routeStatus,'至少需要 2 個景點。'); return;}
 
-  var start=placeById(el.start.value)||places[0];
-  var isRound=!!el.round.checked;
-  var end=isRound?start:(placeById(el.end.value)||places[places.length-1]);
-  if(!start||!end) return;
-  if(!isRound&&start.id===end.id){st(el.routeStatus,'起點與終點相同，請改用環狀。'); return;}
+  var routeIds=ids.slice();
+  var start=placeById(routeIds[0]);
+  var end=el.round.checked?start:placeById(routeIds[routeIds.length-1]);
+  if(!start||!end){st(el.routeStatus,'起點或終點不存在。'); return;}
 
-  var wps=places.filter(function(p){return p.id!==start.id && p.id!==end.id;})
-    .map(function(p){return {location:{lat:p.lat,lng:p.lng},stopover:true,_id:p.id};});
+  var middleIds=el.round.checked?routeIds.slice(1):routeIds.slice(1,-1);
+  var wps=middleIds.map(function(id){
+    var p=placeById(id);
+    return p?{location:{lat:p.lat,lng:p.lng},stopover:true,_id:id}:null;
+  }).filter(Boolean);
 
   if(wps.length>25){st(el.routeStatus,'點太多：Google Directions 一次最多 25 個 waypoints（目前 '+wps.length+'）。請分批。'); return;}
 
   st(el.routeStatus,'向 Google 計算路線中…');
   el.opt.disabled=true;
+  if(el.manualPlan) el.manualPlan.disabled=true;
 
   ds.route({
     origin:{lat:start.lat,lng:start.lng},
     destination:{lat:end.lat,lng:end.lng},
     waypoints:wps.map(function(w){return {location:w.location,stopover:true};}),
-    optimizeWaypoints:true,
+    optimizeWaypoints:!!optimizeWaypoints,
     travelMode:String(el.mode.value||'DRIVING')
   }, function(res,status){
-    el.opt.disabled=false;
+    el.opt.disabled=places.length<2;
+    if(el.manualPlan) el.manualPlan.disabled=places.length<2;
     if(status!=='OK'||!res||!res.routes||!res.routes[0]){st(el.routeStatus,'Google 路線計算失敗（'+String(status)+'）。可改用本地計算。'); return;}
 
     if(localPolyline){ localPolyline.setMap(null); localPolyline=null; }
     dr.setDirections(res);
     var route=res.routes[0];
     var order=route.waypoint_order||[];
-    var ids=[start.id].concat(order.map(function(i){return wps[i]._id;})).concat([end.id]);
-    orderIds=ids;
+    var orderedWpIds=optimizeWaypoints?order.map(function(i){return wps[i]._id;}):wps.map(function(w){return w._id;});
+    var idsOut=[start.id].concat(orderedWpIds).concat([end.id]);
+    orderIds=idsOut;
     renderMarkers(); renderList();
 
     el.it.innerHTML='';
     var legs=route.legs||[];
     var totalM=0,totalS=0;
     for(var i=0;i<legs.length;i++){
-      var from=placeById(ids[i]), to=placeById(ids[i+1]);
+      var from=placeById(idsOut[i]), to=placeById(idsOut[i+1]);
       var leg=legs[i];
       if(leg.distance&&typeof leg.distance.value==='number') totalM+=leg.distance.value;
       if(leg.duration&&typeof leg.duration.value==='number') totalS+=leg.duration.value;
@@ -318,8 +393,28 @@ function googleOptimize(){
     tail.innerHTML='<strong>總計</strong><div class="status">距離：約 '+esc((totalM/1000).toFixed(2))+' km · 時間：約 '+esc(fmtSec(totalS))+'</div>';
     el.it.appendChild(tail);
 
-    st(el.routeStatus,'已完成 Google 最佳化（依道路/時間）。');
+    st(el.routeStatus,statusMsg);
   });
+}
+
+function manualPlan(){
+  syncManualOrder();
+  if(manualOrderIds.length<2){st(el.manualStatus,'至少需要 2 個景點才能規劃。'); return;}
+  st(el.manualStatus,'已依手動排序規劃路線。');
+  el.it.innerHTML=''; st(el.routeStatus,'');
+  if(String(el.method.value)==='local') return renderLocalRoute(manualOrderIds,'已完成手動順序規劃（直線距離）。');
+  return renderGoogleRoute(manualOrderIds,false,'已完成手動順序規劃（依道路/時間）。');
+}
+
+function googleOptimize(){
+  var start=placeById(el.start.value)||places[0];
+  var isRound=!!el.round.checked;
+  var end=isRound?start:(placeById(el.end.value)||places[places.length-1]);
+  if(!start||!end) return;
+  if(!isRound&&start.id===end.id){st(el.routeStatus,'起點與終點相同，請改用環狀。'); return;}
+  var ids=[start.id].concat(places.filter(function(p){return p.id!==start.id&&p.id!==end.id;}).map(function(p){return p.id;}));
+  if(!isRound) ids.push(end.id);
+  return renderGoogleRoute(ids,true,'已完成 Google 最佳化（依道路/時間）。');
 }
 
 function optimize(){
@@ -436,10 +531,13 @@ function bind(){
   if(el.opt){
     el.opt.addEventListener('click',optimize);
   }
+  if(el.manualPlan){
+    el.manualPlan.addEventListener('click',manualPlan);
+  }
 
   if(el.clearAll){
     el.clearAll.addEventListener('click',function(){
-      places=[]; candidates=[]; orderIds=null; savePlaces();
+      places=[]; candidates=[]; orderIds=null; manualOrderIds=[]; savePlaces();
       if(localPolyline){ localPolyline.setMap(null); localPolyline=null; }
       renderCandidates(); syncUI(); st(el.searchStatus,'已清空。');
     });
