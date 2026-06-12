@@ -1,0 +1,15 @@
+{
+  "name": "TripRoute Pro 自助旅行路線規劃",
+  "short_name": "TripRoute",
+  "description": "多天自助旅行路線規劃:搜尋景點、智慧排序、時間表、Google Maps 導航與匯出。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
