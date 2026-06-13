@@ -5,6 +5,7 @@
 ```
 index.html  styles.css  app.js
 manifest.webmanifest  sw.js  favicon.svg
+icon-180.png  icon-192.png  icon-512.png
 ```
 
 ## 1) Google Maps API Key
@@ -16,7 +17,9 @@ manifest.webmanifest  sw.js  favicon.svg
 | Maps JavaScript API | 地圖顯示 | 必要 |
 | Geocoding API | 地點搜尋、反查地址、placeId 轉座標 | 必要 |
 | Directions API | 路線與時間計算 | 必要 |
-| Places API | 輸入時的即時搜尋建議 | 建議(未啟用會自動退回 Geocoding 搜尋) |
+| Places API (New) | 輸入時的即時搜尋建議 | 建議(未啟用會自動退回 Geocoding 搜尋) |
+
+> 即時建議優先使用新版 Places API(AutocompleteSuggestion);舊專案若只啟用了舊版 Places API 也能自動相容。兩者都沒有時,輸入後按「搜尋」仍可正常運作(走 Geocoding)。
 
 ### Key 安全(重要)
 

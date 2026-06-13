@@ -154,6 +154,7 @@ input[type="time"].in{padding:8px 10px}
 
 /* ============ Day tabs ============ */
 .dayTabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.dayTabWrap{display:flex;align-items:center;gap:2px}
 .dayTab{
   padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:transparent;
   color:var(--muted);cursor:pointer;font-size:12px;font-weight:700;font-family:var(--font);
@@ -161,8 +162,11 @@ input[type="time"].in{padding:8px 10px}
 }
 .dayTab .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
 .dayTab.active{color:var(--text);border-color:var(--b);background:color-mix(in srgb,var(--b) 14%,transparent)}
-.dayTab .x{margin-left:2px;opacity:.6;font-weight:400}
-.dayTab .x:hover{opacity:1;color:var(--danger)}
+.dayTabX{
+  border:0;background:transparent;color:var(--muted);cursor:pointer;
+  padding:4px 6px;border-radius:8px;font-size:11px;line-height:1;font-family:var(--font);
+}
+.dayTabX:hover,.dayTabX:focus-visible{color:var(--danger);background:var(--hoverBg)}
 
 /* ============ Place list ============ */
 .list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
@@ -172,7 +176,8 @@ input[type="time"].in{padding:8px 10px}
 }
 .item.dragging{opacity:.45}
 .item.dragOver{border-color:var(--a);box-shadow:0 0 0 2px color-mix(in srgb,var(--a) 35%,transparent)}
-.dragHandle{cursor:grab;color:var(--muted);font-size:15px;padding:4px 2px;user-select:none;touch-action:none}
+.dragHandle{cursor:grab;color:var(--muted);font-size:15px;padding:4px 2px;user-select:none}
+@media(pointer:coarse){.dragHandle{display:none}} /* 觸控裝置用 ↑↓ 排序;HTML5 拖放不支援觸控 */
 .n{
   width:28px;height:28px;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:13px;
   background:var(--b);color:var(--onAccent);

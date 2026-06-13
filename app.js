@@ -29,7 +29,7 @@ const el = {
   start: $('start'), end: $('end'), round: $('round'), opt: $('opt'), planAsIs: $('planAsIs'),
   useGoogle: $('useGoogle'), routeStatus: $('routeStatus'),
   dayCount: $('dayCount'), clearDay: $('clearDay'), list: $('list'),
-  itCard: $('itCard'), itSummary: $('itSummary'), it: $('it'),
+  itCard: $('itCard'), itDayLabel: $('itDayLabel'), itSummary: $('itSummary'), it: $('it'),
   openNav: $('openNav'), copyText: $('copyText'), exportCsv: $('exportCsv'), printBtn: $('printBtn'), navLinks: $('navLinks'),
   map: $('map'), mapEmpty: $('mapEmpty'), showAllDays: $('showAllDays'),
   toasts: $('toasts'), undoBar: $('undoBar'), undoMsg: $('undoMsg'), undoBtn: $('undoBtn'),
@@ -157,6 +157,7 @@ let activeDayId = null;
 
 let map = null, geocoder = null, ds = null, infoWin = null;
 let acService = null, acSessionToken = null, placesAvailable = false;
+let AcSuggestion = null, AcTokenClass = null; // 新版 Places Autocomplete(優先)
 let initMapCalled = false;
 let markers = [];           // {marker, placeId}
 let dirRenderers = [];      // DirectionsRenderer[]
@@ -164,7 +165,7 @@ let localLines = [];        // Polyline[]
 let candidates = [];        // geocoder 搜尋候選
 let acItems = [];           // autocomplete 預測
 let acSel = -1;
-let undoSnapshot = null, undoTimer = null;
+let undoSnapshot = null, undoTimer = null, undoTripId = null;
 let planning = false;
 
 function defaultDay() {
@@ -200,10 +201,15 @@ function sanitizeTrip(t) {
       endId: typeof d.endId === 'string' ? d.endId : null,
     }));
   }
+  // id 必須唯一(分享連結/匯入檔是不可信輸入,重複 id 會破壞刪除與查找)
+  const seenDay = new Set();
+  trip.days.forEach((d) => { if (seenDay.has(d.id)) d.id = uid('d'); seenDay.add(d.id); });
   const dayIds = new Set(trip.days.map((d) => d.id));
   const first = trip.days[0].id;
   if (Array.isArray(t.places)) {
     trip.places = t.places.slice(0, 500).map((p) => sanitizePlace(p, dayIds, first)).filter(Boolean);
+    const seenPlace = new Set();
+    trip.places.forEach((p) => { if (seenPlace.has(p.id)) p.id = uid('p'); seenPlace.add(p.id); });
   }
   return trip;
 }
@@ -298,9 +304,11 @@ function displayOrder(dayId) {
 }
 function invalidateDay(dayId) {
   routes.delete(dayId);
-  clearRouteOverlays();
-  el.itCard.hidden = true;
-  setStatus(el.routeStatus, '');
+  if (dayId === activeDayId) {
+    clearRouteOverlays();
+    el.itCard.hidden = true;
+    setStatus(el.routeStatus, '');
+  }
 }
 
 // ===================== 主題 =====================
@@ -330,29 +338,43 @@ const DARK_MAP_STYLE = [
 ];
 
 // ===================== Google Maps 載入 =====================
+let authFailed = false;
 window.gm_authFailure = function () {
-  setStatus(el.keyStatus, 'API Key 驗證失敗:請確認 key 正確、已啟用計費,且 HTTP referrer 限制包含此網域。', 'err');
+  authFailed = true;
+  setStatus(el.keyStatus, 'API Key 驗證失敗:請確認 key 正確、已啟用計費,且 HTTP referrer 限制包含此網域。修正後重新按「儲存並載入地圖」即可。', 'err');
   el.keyCard.open = true;
 };
 function loadKey() { try { return (localStorage.getItem(LS_KEY) || '').trim(); } catch (e) { return ''; } }
 function saveKey(k) { try { localStorage.setItem(LS_KEY, (k || '').trim()); } catch (e) {} }
 function clearKeyStore() { try { localStorage.removeItem(LS_KEY); } catch (e) {} }
 
+let loadedKey = null, scriptLoading = false;
 function loadGoogleMaps(keyOverride) {
   const key = (keyOverride || '').trim() || loadKey();
   if (!key) { setStatus(el.keyStatus, '尚未設定 API key。'); return; }
   if (window.google && window.google.maps) {
+    // Maps JS 同一頁面無法換 key 重新初始化 → 自動重新整理套用
+    if ((loadedKey && key !== loadedKey) || authFailed) {
+      saveKey(key);
+      setStatus(el.keyStatus, '已儲存新 key,重新載入頁面套用…');
+      setTimeout(() => location.reload(), 400);
+      return;
+    }
     if (!initMapCalled) window.initMap();
     return;
   }
+  if (scriptLoading) { setStatus(el.keyStatus, 'Google Maps 載入中,請稍候…'); return; }
+  scriptLoading = true;
+  loadedKey = key;
   setStatus(el.keyStatus, '載入 Google Maps 中…');
-  const old = document.getElementById('gmaps-js');
-  if (old) old.remove();
   const s = document.createElement('script');
   s.id = 'gmaps-js';
   s.async = true;
   s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) + '&loading=async&callback=initMap&v=weekly';
-  s.onerror = () => setStatus(el.keyStatus, 'Google Maps 載入失敗:請確認網路、key、網域限制與 Maps JavaScript API 是否啟用。', 'err');
+  s.onerror = () => {
+    scriptLoading = false;
+    setStatus(el.keyStatus, 'Google Maps 載入失敗:請確認網路、key、網域限制與 Maps JavaScript API 是否啟用。', 'err');
+  };
   document.head.appendChild(s);
   setTimeout(() => {
     if (!initMapCalled && !(window.google && window.google.maps)) {
@@ -363,6 +385,7 @@ function loadGoogleMaps(keyOverride) {
 
 window.initMap = async function () {
   initMapCalled = true;
+  scriptLoading = false;
   el.mapEmpty.style.display = 'none';
   const theme = document.documentElement.getAttribute('data-theme');
   map = new google.maps.Map(el.map, {
@@ -377,12 +400,16 @@ window.initMap = async function () {
   setStatus(el.keyStatus, 'Google Maps 已就緒 ✓', 'ok');
   el.keyCard.open = false;
 
-  // Places(選用):有啟用就提供即時建議,沒有則退回 Geocoding 搜尋
+  // Places(選用):有啟用就提供即時建議,沒有則退回 Geocoding 搜尋。
+  // 優先用新版 AutocompleteSuggestion(Places API New);失敗再退舊版 AutocompleteService。
   try {
     const lib = await google.maps.importLibrary('places');
-    acService = new (lib.AutocompleteService || google.maps.places.AutocompleteService)();
-    acSessionToken = new (lib.AutocompleteSessionToken || google.maps.places.AutocompleteSessionToken)();
-    placesAvailable = true;
+    AcSuggestion = lib.AutocompleteSuggestion || null;
+    const SvcClass = lib.AutocompleteService || (google.maps.places && google.maps.places.AutocompleteService) || null;
+    acService = SvcClass ? new SvcClass() : null;
+    AcTokenClass = lib.AutocompleteSessionToken || (google.maps.places && google.maps.places.AutocompleteSessionToken) || null;
+    acSessionToken = AcTokenClass ? new AcTokenClass() : null;
+    placesAvailable = !!(AcSuggestion || acService);
   } catch (e) {
     placesAvailable = false;
   }
@@ -408,14 +435,21 @@ window.initMap = async function () {
 };
 
 // ===================== 搜尋/加點 =====================
-function hideAc() { el.acList.hidden = true; el.q.setAttribute('aria-expanded', 'false'); acItems = []; acSel = -1; }
+function hideAc() {
+  el.acList.hidden = true;
+  el.q.setAttribute('aria-expanded', 'false');
+  el.q.removeAttribute('aria-activedescendant');
+  acItems = []; acSel = -1;
+}
 function renderAc() {
   el.acList.innerHTML = '';
   if (!acItems.length) { hideAc(); return; }
   acItems.forEach((it, i) => {
     const d = document.createElement('div');
     d.className = 'acItem' + (i === acSel ? ' sel' : '');
+    d.id = 'acOpt-' + i;
     d.setAttribute('role', 'option');
+    d.setAttribute('aria-selected', i === acSel ? 'true' : 'false');
     const main = document.createElement('div');
     main.textContent = it.main;
     const sub = document.createElement('div');
@@ -428,20 +462,59 @@ function renderAc() {
   });
   el.acList.hidden = false;
   el.q.setAttribute('aria-expanded', 'true');
+  if (acSel >= 0) el.q.setAttribute('aria-activedescendant', 'acOpt-' + acSel);
+  else el.q.removeAttribute('aria-activedescendant');
 }
-const onQueryInput = debounce(() => {
+async function fetchSuggestions(q) {
+  // 新版 Places API
+  if (AcSuggestion) {
+    try {
+      const res = await AcSuggestion.fetchAutocompleteSuggestions({ input: q, sessionToken: acSessionToken });
+      return (res.suggestions || [])
+        .map((s) => s.placePrediction)
+        .filter(Boolean)
+        .slice(0, 6)
+        .map((p) => ({
+          placeId: p.placeId,
+          main: (p.mainText && p.mainText.text) || (p.text && p.text.text) || '',
+          sub: (p.secondaryText && p.secondaryText.text) || '',
+        }));
+    } catch (e) {
+      AcSuggestion = null; // 新版未授權 → 之後改試舊版
+    }
+  }
+  // 舊版 Places API
+  if (acService) {
+    return new Promise((resolve) => {
+      acService.getPlacePredictions({ input: q, sessionToken: acSessionToken }, (preds, status) => {
+        if (status === 'OK' && preds && preds.length) {
+          resolve(preds.slice(0, 6).map((p) => ({
+            placeId: p.place_id,
+            main: (p.structured_formatting && p.structured_formatting.main_text) || p.description,
+            sub: (p.structured_formatting && p.structured_formatting.secondary_text) || '',
+          })));
+          return;
+        }
+        // 未授權/額度問題 → 停用即時建議,避免每個按鍵都打一次失敗請求
+        if (status === 'REQUEST_DENIED' || status === 'NOT_AVAILABLE' || status === 'OVER_QUERY_LIMIT') {
+          placesAvailable = false;
+        }
+        resolve([]);
+      });
+    });
+  }
+  placesAvailable = false;
+  return [];
+}
+const onQueryInput = debounce(async () => {
   const q = el.q.value.trim();
-  if (!q || !placesAvailable || !acService) { hideAc(); return; }
-  acService.getPlacePredictions({ input: q, sessionToken: acSessionToken }, (preds, status) => {
-    if (status !== 'OK' || !preds || !preds.length) { hideAc(); return; }
-    acItems = preds.slice(0, 6).map((p) => ({
-      placeId: p.place_id,
-      main: (p.structured_formatting && p.structured_formatting.main_text) || p.description,
-      sub: (p.structured_formatting && p.structured_formatting.secondary_text) || '',
-    }));
-    acSel = -1;
-    renderAc();
-  });
+  if (!q || !placesAvailable) { hideAc(); return; }
+  const items = await fetchSuggestions(q);
+  if (el.q.value.trim() !== q) return; // 輸入已變,丟棄過時結果
+  acItems = items;
+  acSel = -1;
+  if (!items.length) { hideAc(); return; }
+  renderAc();
 }, 280);
 
 function pickAc(i) {
@@ -463,7 +536,7 @@ function pickAc(i) {
     });
     el.q.value = '';
     // Places 計費:選取後重啟 session
-    try { acSessionToken = new google.maps.places.AutocompleteSessionToken(); } catch (e) {}
+    try { if (AcTokenClass) acSessionToken = new AcTokenClass(); } catch (e) {}
   });
 }
 
@@ -565,6 +638,9 @@ function useMyLocation() {
 function addPlace(data) {
   const t = activeTrip(); if (!t) return;
   const d = activeDay(); if (!d) return;
+  // 清掉殘留的搜尋候選與預覽標記,避免「加入此地點」誤加舊結果
+  if (candidates.length) { candidates = []; renderCandidates(); }
+  if (previewMarker) { previewMarker.setMap(null); previewMarker = null; }
   const p = {
     id: uid('p'),
     name: String(data.name || '未命名地點').slice(0, 120),
@@ -587,10 +663,12 @@ function renderDayTabs() {
   const t = activeTrip(); if (!t) return;
   el.dayTabs.innerHTML = '';
   t.days.forEach((d, i) => {
+    const wrap = document.createElement('span');
+    wrap.className = 'dayTabWrap';
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'dayTab' + (d.id === activeDayId ? ' active' : '');
-    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-pressed', d.id === activeDayId ? 'true' : 'false');
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.background = DAY_COLORS[i % DAY_COLORS.length];
@@ -599,16 +677,19 @@ function renderDayTabs() {
     const cnt = dayPlaces(d.id).length;
     label.textContent = '第 ' + (i + 1) + ' 天' + (cnt ? '(' + cnt + ')' : '');
     b.appendChild(label);
-    if (t.days.length > 1) {
-      const x = document.createElement('span');
-      x.className = 'x';
-      x.textContent = '✕';
-      x.title = '刪除此天';
-      x.addEventListener('click', (ev) => { ev.stopPropagation(); removeDay(d.id); });
-      b.appendChild(x);
-    }
     b.addEventListener('click', () => { activeDayId = d.id; syncAll(); });
-    el.dayTabs.appendChild(b);
+    wrap.appendChild(b);
+    if (t.days.length > 1) {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'dayTabX';
+      x.textContent = '✕';
+      x.title = '刪除第 ' + (i + 1) + ' 天';
+      x.setAttribute('aria-label', '刪除第 ' + (i + 1) + ' 天');
+      x.addEventListener('click', () => removeDay(d.id));
+      wrap.appendChild(x);
+    }
+    el.dayTabs.appendChild(wrap);
   });
 }
 function addDay() {
@@ -627,6 +708,7 @@ function removeDay(dayId) {
   const cnt = dayPlaces(dayId).length;
   if (cnt && !window.confirm('第 ' + (idx + 1) + ' 天有 ' + cnt + ' 個景點,刪除後將移到第 1 天。確定刪除?')) return;
   t.days = t.days.filter((d) => d.id !== dayId);
+  if (!t.days.length) t.days.push(defaultDay());
   const firstId = t.days[0].id;
   t.places.forEach((p) => { if (p.dayId === dayId) p.dayId = firstId; });
   routes.delete(dayId);
@@ -640,7 +722,7 @@ function renderDaySettings() {
   el.depart.value = d.depart;
   el.mode.value = d.mode;
   el.round.checked = !!d.round;
-  const list = dayPlaces(d.id);
+  const list = displayOrder(d.id); // 與清單顯示同一套編號
   const fill = (sel, selectedId, dflt) => {
     sel.innerHTML = '';
     list.forEach((p, i) => {
@@ -680,13 +762,15 @@ function renderList() {
   ordered.forEach((p, i) => {
     const item = document.createElement('div');
     item.className = 'item';
-    item.draggable = true;
     item.dataset.pid = p.id;
 
     const handle = document.createElement('div');
     handle.className = 'dragHandle';
     handle.textContent = '⠿';
     handle.title = '拖曳調整順序';
+    // 只有從把手按下才可拖曳,避免劫持備註/停留欄位的文字選取
+    handle.addEventListener('pointerdown', () => { item.draggable = true; });
+    handle.addEventListener('pointerup', () => { item.draggable = false; });
     item.appendChild(handle);
 
     const n = document.createElement('div');
@@ -775,10 +859,12 @@ function renderList() {
     const rowMini = document.createElement('div');
     rowMini.className = 'rowMini';
     const up = document.createElement('button');
-    up.type = 'button'; up.className = 'btn mini'; up.textContent = '↑'; up.title = '上移'; up.disabled = i === 0;
+    up.type = 'button'; up.className = 'btn mini btnUp'; up.textContent = '↑'; up.title = '上移'; up.disabled = i === 0;
+    up.setAttribute('aria-label', '上移 ' + p.name);
     up.addEventListener('click', () => movePlace(p.id, -1));
     const down = document.createElement('button');
-    down.type = 'button'; down.className = 'btn mini'; down.textContent = '↓'; down.title = '下移'; down.disabled = i === ordered.length - 1;
+    down.type = 'button'; down.className = 'btn mini btnDown'; down.textContent = '↓'; down.title = '下移'; down.disabled = i === ordered.length - 1;
+    down.setAttribute('aria-label', '下移 ' + p.name);
     down.addEventListener('click', () => movePlace(p.id, 1));
     rowMini.appendChild(up); rowMini.appendChild(down);
     acts.appendChild(rowMini);
@@ -794,7 +880,7 @@ function renderList() {
       item.classList.add('dragging');
       try { ev.dataTransfer.setData('text/plain', p.id); ev.dataTransfer.effectAllowed = 'move'; } catch (e) {}
     });
-    item.addEventListener('dragend', () => { dragId = null; item.classList.remove('dragging'); listEl.querySelectorAll('.dragOver').forEach((x) => x.classList.remove('dragOver')); });
+    item.addEventListener('dragend', () => { dragId = null; item.draggable = false; item.classList.remove('dragging'); listEl.querySelectorAll('.dragOver').forEach((x) => x.classList.remove('dragOver')); });
     item.addEventListener('dragover', (ev) => { ev.preventDefault(); if (dragId && dragId !== p.id) item.classList.add('dragOver'); });
     item.addEventListener('dragleave', () => item.classList.remove('dragOver'));
     item.addEventListener('drop', (ev) => {
@@ -824,6 +910,14 @@ function movePlace(pid, dir) {
   if (i < 0 || j < 0 || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
   applyDayOrder(d.id, ids);
+  // 清單重建會摧毀焦點:把焦點放回同一顆按鈕,鍵盤連續排序才可行
+  const item = el.list.querySelector('[data-pid="' + pid + '"]');
+  if (item) {
+    const btn = item.querySelector(dir < 0 ? '.btnUp' : '.btnDown');
+    const alt = item.querySelector(dir < 0 ? '.btnDown' : '.btnUp');
+    if (btn && !btn.disabled) btn.focus();
+    else if (alt && !alt.disabled) alt.focus();
+  }
 }
 function reorderPlace(fromId, toId) {
   const d = activeDay(); if (!d) return;
@@ -859,14 +953,16 @@ function clearDay() {
 function snapshotForUndo(msg) {
   const t = activeTrip(); if (!t) return;
   undoSnapshot = JSON.stringify(t.places);
+  undoTripId = t.id;
   el.undoMsg.textContent = msg;
   el.undoBar.hidden = false;
   clearTimeout(undoTimer);
-  undoTimer = setTimeout(() => { el.undoBar.hidden = true; undoSnapshot = null; }, 6000);
+  undoTimer = setTimeout(() => { el.undoBar.hidden = true; undoSnapshot = null; undoTripId = null; }, 6000);
 }
 function doUndo() {
-  const t = activeTrip();
-  if (!t || !undoSnapshot) return;
+  // 還原到快照所屬的行程,而非當前行程(期間可能已切換)
+  const t = state.trips.find((x) => x.id === undoTripId);
+  if (!t || !undoSnapshot) { el.undoBar.hidden = true; return; }
   try {
     const arr = JSON.parse(undoSnapshot);
     const dayIds = new Set(t.days.map((d) => d.id));
@@ -879,6 +975,7 @@ function doUndo() {
   } catch (e) {}
   el.undoBar.hidden = true;
   undoSnapshot = null;
+  undoTripId = null;
 }
 
 // ===================== 地圖標記 =====================
@@ -1179,7 +1276,7 @@ async function fetchTransitLegs(d, pathStops) {
   for (let i = 0; i < pathStops.length - 1; i++) {
     const from = pathStops[i], to = pathStops[i + 1];
     setStatus(el.routeStatus, '查詢大眾運輸路線…(' + (i + 1) + '/' + (pathStops.length - 1) + ' 段)');
-    let leg;
+    let leg, arriveAt;
     try {
       const res = await routeWithRetry({
         origin: { lat: from.lat, lng: from.lng },
@@ -1189,15 +1286,27 @@ async function fetchTransitLegs(d, pathStops) {
       });
       gResults.push(res);
       const L = res.routes[0].legs[0];
-      leg = { fromId: from.id, toId: to.id, m: (L.distance && L.distance.value) || 0, s: (L.duration && L.duration.value) || 0, est: false };
+      // 大眾運輸的 duration 不含「等下一班車」的時間:用真實發車/抵達時刻計算等候並串接
+      const depReal = (L.departure_time && L.departure_time.value) ? L.departure_time.value : t;
+      arriveAt = (L.arrival_time && L.arrival_time.value)
+        ? L.arrival_time.value
+        : new Date(depReal.getTime() + (((L.duration && L.duration.value) || 0) * 1000));
+      leg = {
+        fromId: from.id, toId: to.id,
+        m: (L.distance && L.distance.value) || 0,
+        s: (L.duration && L.duration.value) || 0,
+        wait: Math.max(0, Math.round((depReal.getTime() - t.getTime()) / 1000)),
+        est: false,
+      };
     } catch (e) {
-      // 該段無大眾運輸 → 以步行/估算補
+      // 該段無大眾運輸 → 以估算補
       const e2 = estimateLeg(from, to, 'TRANSIT');
       leg = { fromId: from.id, toId: to.id, m: e2.m, s: e2.s, est: true };
+      arriveAt = new Date(t.getTime() + e2.s * 1000);
     }
     legs.push(leg);
     const stay = (placeById(to.id) || { stayMin: 0 }).stayMin * 60;
-    t = new Date(t.getTime() + (leg.s + stay) * 1000);
+    t = new Date(arriveAt.getTime() + stay * 1000);
     if (i < pathStops.length - 2) await sleep(300);
   }
   legs._gResults = gResults;
@@ -1205,46 +1314,66 @@ async function fetchTransitLegs(d, pathStops) {
 }
 
 function finishRoute(d, orderedIds, legs, via, gResults) {
-  routes.set(d.id, { orderIds: orderedIds.slice(), legs, mode: d.mode, round: !!d.round, via });
+  routes.set(d.id, { orderIds: orderedIds.slice(), legs, mode: d.mode, round: !!d.round, via, gResults: gResults || null });
   saveState();
-  renderRouteOverlays(d, gResults, orderedIds);
-  renderList();
-  renderMarkers();
-  renderDaySettings();
-  renderDayTabs();
-  renderItinerary(d.id);
+  // 規劃期間使用者可能已切到別天:只在仍是當前天時更新畫面(結果已存,切回分頁即顯示)
+  if (d.id === activeDayId) {
+    renderRouteOverlays(d, gResults, orderedIds);
+    renderList();
+    renderMarkers();
+    renderDaySettings();
+    renderDayTabs();
+    renderItinerary(d.id);
+  }
   const est = legs.some((l) => l.est);
+  const dayNo = dayIndex(d.id) + 1;
   setStatus(el.routeStatus,
-    via === 'google'
-      ? '路線完成 ✓(Google 道路資料' + (est ? ',部分路段為估算' : '') + ')'
-      : '路線完成 ✓(直線距離估算,實際交通時間會更長)', 'ok');
+    '第 ' + dayNo + ' 天路線完成 ✓' + (via === 'google'
+      ? '(Google 道路資料' + (est ? ',部分路段為估算' : '') + ')'
+      : '(直線距離估算,實際交通時間會更長)'), 'ok');
 }
 
 function renderRouteOverlays(d, gResults, orderedIds) {
   clearRouteOverlays();
   if (!map) return;
   const color = dayColor(d.id);
+  const bounds = new google.maps.LatLngBounds();
+  const dashedIcon = [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, scale: 3 }, offset: '0', repeat: '14px' }];
+  let hasBounds = false;
   if (gResults && gResults.length) {
-    gResults.forEach((res, i) => {
+    gResults.forEach((res) => {
       const r = new google.maps.DirectionsRenderer({
-        map, directions: res, suppressMarkers: true, preserveViewport: i > 0,
+        map, directions: res, suppressMarkers: true, preserveViewport: true,
         polylineOptions: { strokeColor: color, strokeOpacity: 0.85, strokeWeight: 5 },
       });
       dirRenderers.push(r);
+      const b = res.routes[0] && res.routes[0].bounds;
+      if (b) { bounds.union(b); hasBounds = true; }
     });
+    // 估算補上的路段(例如某段查不到大眾運輸)以虛線呈現,避免地圖出現無聲缺口
+    const stored = routes.get(d.id);
+    if (stored) {
+      stored.legs.filter((l) => l.est).forEach((l) => {
+        const A = placeById(l.fromId), B = placeById(l.toId);
+        if (!A || !B) return;
+        const path = [{ lat: A.lat, lng: A.lng }, { lat: B.lat, lng: B.lng }];
+        localLines.push(new google.maps.Polyline({
+          map, path, geodesic: true, strokeColor: color, strokeOpacity: 0, strokeWeight: 3, icons: dashedIcon,
+        }));
+        path.forEach((p) => { bounds.extend(p); hasBounds = true; });
+      });
+    }
   } else {
     const stops = orderedIds.map((id) => placeById(id)).filter(Boolean);
     const path = (d.round ? [...stops, stops[0]] : stops).map((p) => ({ lat: p.lat, lng: p.lng }));
     const line = new google.maps.Polyline({
       map, path, geodesic: true,
-      strokeColor: color, strokeOpacity: 0.8, strokeWeight: 4,
-      icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, scale: 3 }, offset: '0', repeat: '14px' }],
+      strokeColor: color, strokeOpacity: 0, strokeWeight: 4, icons: dashedIcon,
     });
     localLines.push(line);
-    const b = new google.maps.LatLngBounds();
-    path.forEach((p) => b.extend(p));
-    map.fitBounds(b, 64);
+    path.forEach((p) => { bounds.extend(p); hasBounds = true; });
   }
+  if (hasBounds) map.fitBounds(bounds, 64);
 }
 
 // ===================== 行程表 =====================
@@ -1278,7 +1407,8 @@ function computeSchedule(dayId) {
     const leg = r.legs[i];
     if (leg) {
       row.leg = leg;
-      clock = new Date((row.leave || row.arrive || clock).getTime() + leg.s * 1000);
+      // wait = 等候下一班大眾運輸的時間(其他模式為 0)
+      clock = new Date((row.leave || row.arrive || clock).getTime() + ((leg.wait || 0) + leg.s) * 1000);
     }
     rows.push(row);
   });
@@ -1286,7 +1416,8 @@ function computeSchedule(dayId) {
   if (r.round && r.legs.length === stops.length) backArrive = new Date(clock);
   const totalM = r.legs.reduce((a, l) => a + l.m, 0);
   const totalS = r.legs.reduce((a, l) => a + l.s, 0);
-  const stayS = stops.reduce((a, p, i) => (i === 0 && !r.round ? a : a + p.stayMin * 60), 0);
+  // 起點的停留不計入(行程從起點「出發」開始;環狀回到起點也不再停留)
+  const stayS = stops.reduce((a, p, i) => (i === 0 ? a : a + p.stayMin * 60), 0);
   const endTime = r.round ? backArrive : (rows[rows.length - 1].leave || rows[rows.length - 1].arrive);
   return { rows, totalM, totalS, stayS, endTime, backArrive, r, d, stops };
 }
@@ -1300,6 +1431,7 @@ function renderItinerary(dayId) {
   if (!sch) { el.itCard.hidden = true; return; }
   const { rows, totalM, totalS, stayS, endTime, backArrive, r } = sch;
   el.itCard.hidden = false;
+  el.itDayLabel.textContent = '第 ' + (dayIndex(dayId) + 1) + ' 天';
 
   el.itSummary.innerHTML = '';
   const mkStat = (label, value) => {
@@ -1345,8 +1477,9 @@ function renderItinerary(dayId) {
       tr.className = 'legTravel';
       const toPlace = placeById(row.leg.toId);
       const modeIcon = (MODE_LABEL[r.mode] || '').split(' ')[0];
+      const waitStr = (row.leg.wait && row.leg.wait > 60) ? '等候 ' + fmtDur(row.leg.wait) + ' · ' : '';
       tr.appendChild(document.createTextNode(
-        '↓ ' + modeIcon + ' ' + fmtKm(row.leg.m) + ' · ' + fmtDur(row.leg.s) + (row.leg.est ? '(估)' : '')
+        '↓ ' + modeIcon + ' ' + waitStr + fmtKm(row.leg.m) + ' · ' + fmtDur(row.leg.s) + (row.leg.est ? '(估)' : '')
       ));
       const a = document.createElement('a');
       a.href = mapsDirUrl([row.place, toPlace || row.place], r.mode);
@@ -1373,30 +1506,38 @@ function renderItinerary(dayId) {
   renderNavLinks(dayId);
 }
 
+function navChunks(r) {
+  // Google Maps 導航網址:一般模式一次最多約 10 個點;大眾運輸不支援中途點 → 逐段
+  const stops = r.orderIds.map((id) => placeById(id)).filter(Boolean);
+  const pathStops = r.round ? [...stops, stops[0]] : stops;
+  const size = r.mode === 'TRANSIT' ? 2 : NAV_CHUNK;
+  const chunks = [];
+  let i = 0;
+  while (i < pathStops.length - 1) {
+    const c = pathStops.slice(i, Math.min(i + size, pathStops.length));
+    chunks.push(c);
+    i += c.length - 1;
+  }
+  return chunks;
+}
 function renderNavLinks(dayId) {
   el.navLinks.innerHTML = '';
   const r = routes.get(dayId);
   if (!r) return;
-  const stops = r.orderIds.map((id) => placeById(id)).filter(Boolean);
-  const pathStops = r.round ? [...stops, stops[0]] : stops;
-  const chunks = [];
-  let i = 0;
-  while (i < pathStops.length - 1) {
-    const c = pathStops.slice(i, Math.min(i + NAV_CHUNK, pathStops.length));
-    chunks.push(c);
-    i += c.length - 1;
-  }
+  const chunks = navChunks(r);
   if (chunks.length > 1) {
     const info = document.createElement('div');
     info.className = 'small muted';
-    info.textContent = 'Google Maps 導航一次最多約 10 個點,已自動分成 ' + chunks.length + ' 段:';
+    info.textContent = r.mode === 'TRANSIT'
+      ? 'Google Maps 大眾運輸導航不支援中途點,已自動逐段拆分:'
+      : 'Google Maps 導航一次最多約 10 個點,已自動分成 ' + chunks.length + ' 段:';
     el.navLinks.appendChild(info);
     chunks.forEach((c, k) => {
       const a = document.createElement('a');
       a.href = mapsDirUrl(c, r.mode);
       a.target = '_blank';
       a.rel = 'noreferrer noopener';
-      a.textContent = '第 ' + (k + 1) + ' 段:' + c[0].name + ' → ' + c[c.length - 1].name + '(' + c.length + ' 點)';
+      a.textContent = '第 ' + (k + 1) + ' 段:' + c[0].name + ' → ' + c[c.length - 1].name;
       el.navLinks.appendChild(a);
     });
   }
@@ -1405,11 +1546,10 @@ function openNav() {
   const d = activeDay(); if (!d) return;
   const r = routes.get(d.id);
   if (!r) { toast('請先規劃路線。', 'err'); return; }
-  const stops = r.orderIds.map((id) => placeById(id)).filter(Boolean);
-  const pathStops = r.round ? [...stops, stops[0]] : stops;
-  const first = pathStops.slice(0, Math.min(NAV_CHUNK, pathStops.length));
-  window.open(mapsDirUrl(first, r.mode), '_blank', 'noopener');
-  if (pathStops.length > NAV_CHUNK) toast('景點較多:其餘路段連結列在行程表下方。');
+  const chunks = navChunks(r);
+  if (!chunks.length) return;
+  window.open(mapsDirUrl(chunks[0], r.mode), '_blank', 'noopener');
+  if (chunks.length > 1) toast('此路線分成 ' + chunks.length + ' 段:其餘連結列在行程表下方。');
 }
 
 // ===================== 匯出 =====================
@@ -1475,6 +1615,10 @@ function exportCsv() {
   toast('已匯出 CSV。', 'ok');
 }
 function printItinerary() {
+  buildPrintArea();
+  window.print();
+}
+function buildPrintArea() {
   const t = activeTrip(); if (!t) return;
   const area = el.printArea;
   area.innerHTML = '';
@@ -1530,7 +1674,6 @@ function printItinerary() {
       area.appendChild(sum);
     }
   });
-  window.print();
 }
 
 // ===================== 行程管理 =====================
@@ -1661,9 +1804,15 @@ function syncAll() {
   renderDaySettings();
   renderList();
   renderMarkers();
-  const r = routes.get(activeDay() ? activeDay().id : '');
-  if (r) renderItinerary(activeDay().id);
-  else { el.itCard.hidden = true; }
+  const d = activeDay();
+  const r = d ? routes.get(d.id) : null;
+  clearRouteOverlays();
+  if (r) {
+    renderRouteOverlays(d, r.gResults, r.orderIds);
+    renderItinerary(d.id);
+  } else {
+    el.itCard.hidden = true;
+  }
 }
 
 // ===================== 事件繫結 =====================
@@ -1741,6 +1890,8 @@ function bind() {
   el.copyText.addEventListener('click', copyItinerary);
   el.exportCsv.addEventListener('click', exportCsv);
   el.printBtn.addEventListener('click', printItinerary);
+  // 瀏覽器選單 / Ctrl+P 列印也要有內容
+  window.addEventListener('beforeprint', buildPrintArea);
 
   // 地圖
   el.showAllDays.addEventListener('change', () => { renderMarkers(); fitAllVisible(); });
@@ -1779,6 +1930,7 @@ function boot() {
   applyTheme(theme);
 
   loadState();
+  saveStateNow(); // 立即持久化(含 v1 遷移結果),避免重新整理時重跑遷移
   checkShareHash();
   bind();
   syncAll();

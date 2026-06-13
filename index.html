@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-Hant" data-theme="dark">
 <head>
   <meta charset="utf-8" />
@@ -8,8 +8,9 @@
   <meta name="color-scheme" content="dark light" />
   <meta name="theme-color" content="#0b1020" />
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon-180.png" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./styles.css?v=2.0.0" />
+  <link rel="stylesheet" href="./styles.css?v=2.0.1" />
 </head>
 <body>
   <header class="top">
@@ -73,7 +74,7 @@
           <span>📅 行程天數</span>
           <button id="addDay" class="btn mini" type="button">＋ 加一天</button>
         </div>
-        <div id="dayTabs" class="dayTabs" role="tablist"></div>
+        <div id="dayTabs" class="dayTabs" role="group" aria-label="行程天數"></div>
         <div class="grid daySettings">
           <label class="lab">出發時間
             <input id="depart" class="in" type="time" value="09:00" />
@@ -108,11 +109,11 @@
           <button id="clearDay" class="btn mini danger" type="button">清空本日</button>
         </div>
         <div class="small muted">拖曳調整順序;設定每點停留時間,行程表會自動算抵達/離開時刻。</div>
-        <div id="list" class="list" aria-live="polite"></div>
+        <div id="list" class="list"></div>
       </div>
 
       <div class="card" id="itCard" hidden>
-        <div class="h">🗓 行程表</div>
+        <div class="h">🗓 行程表 <span id="itDayLabel" class="pill"></span></div>
         <div id="itSummary" class="itSummary"></div>
         <div id="it" class="it"></div>
         <div class="row btnRow wrapRow">
@@ -129,7 +130,7 @@
         <div class="small">
           <ul class="tips">
             <li>本站為純前端,API key 僅存在你的瀏覽器(localStorage),不會上傳;請在 Google Cloud Console 以 <strong>HTTP referrer</strong> 限制 key。</li>
-            <li>需啟用:Maps JavaScript API、Geocoding API、Directions API(建議再啟用 Places API 以獲得即時搜尋建議)。</li>
+            <li>需啟用:Maps JavaScript API、Geocoding API、Directions API(建議再啟用 Places API (New) 以獲得即時搜尋建議)。</li>
             <li>大眾運輸路線會逐段查詢;景點過多時會自動分批,不受 25 個 waypoint 限制。</li>
             <li>資料皆儲存在本機;可用「匯出 JSON / 分享連結」備份或跨裝置同步。</li>
           </ul>
@@ -155,6 +156,6 @@
 
   <input id="importFile" type="file" accept="application/json,.json" hidden />
 
-  <script src="./app.js?v=2.0.0"></script>
+  <script src="./app.js?v=2.0.1"></script>
 </body>
 </html>
